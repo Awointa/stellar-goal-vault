@@ -302,4 +302,69 @@ describe('WalletWidget', () => {
     );
     expect(screen.getByRole('button', { name: /Copy wallet address/i })).toBeTruthy();
   });
+
+  it('shows connect button when wallet is unavailable', () => {
+    render(
+      <WalletWidget
+        status="unavailable"
+        publicKey={null}
+        walletName={null}
+        error={null}
+        network={null}
+        onConnect={noop}
+        onDisconnect={noop}
+        onSwitchWallet={noop}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Connect Freighter wallet/i })).toBeTruthy();
+  });
+
+  it('exposes a status role while connecting', () => {
+    render(
+      <WalletWidget
+        status="connecting"
+        publicKey={null}
+        walletName={null}
+        error={null}
+        network={null}
+        onConnect={noop}
+        onDisconnect={noop}
+        onSwitchWallet={noop}
+      />,
+    );
+    expect(screen.getByRole('status')).toBeTruthy();
+  });
+
+  it('falls back to connect button when status is connected but publicKey is null', () => {
+    render(
+      <WalletWidget
+        status="connected"
+        publicKey={null}
+        walletName="Freighter"
+        error={null}
+        network="Testnet"
+        onConnect={noop}
+        onDisconnect={noop}
+        onSwitchWallet={noop}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Connect Freighter wallet/i })).toBeTruthy();
+    expect(screen.queryByRole('group')).not.toBeTruthy();
+  });
+
+  it('does not render an alert when there is no error', () => {
+    render(
+      <WalletWidget
+        status="available"
+        publicKey={null}
+        walletName={null}
+        error={null}
+        network={null}
+        onConnect={noop}
+        onDisconnect={noop}
+        onSwitchWallet={noop}
+      />,
+    );
+    expect(screen.queryByRole('alert')).not.toBeTruthy();
+  });
 });
