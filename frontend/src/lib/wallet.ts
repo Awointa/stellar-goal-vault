@@ -10,6 +10,7 @@ import {
   signTransaction as lobstrSignTransaction,
 } from '@lobstrco/signer-extension-api';
 import { WalletConnection } from '../types/campaign';
+import { toSigningError } from './signingErrors';
 
 export type WalletType = 'freighter' | 'rabet' | 'xbull' | 'lobstr';
 
@@ -146,10 +147,14 @@ class FreighterAdapter implements WalletAdapter {
   }
 
   async sign(xdr: string, networkPassphrase: string, publicKey: string): Promise<string> {
-    return await signTransaction(xdr, {
-      accountToSign: publicKey,
-      networkPassphrase,
-    });
+    try {
+      return await signTransaction(xdr, {
+        accountToSign: publicKey,
+        networkPassphrase,
+      });
+    } catch (error) {
+      throw toSigningError(error);
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -210,7 +215,7 @@ class RabetAdapter implements WalletAdapter {
       }
       return result.xdr;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Rabet signing failed.');
+      throw toSigningError(error);
     }
   }
 
@@ -257,7 +262,7 @@ class XbullAdapter implements WalletAdapter {
       const bridge = this.getBridge();
       return await bridge.sign({ xdr, publicKey, network: networkPassphrase });
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'xBull signing failed.');
+      throw toSigningError(error);
     }
   }
 
@@ -294,7 +299,7 @@ class LobstrAdapter implements WalletAdapter {
     try {
       return await lobstrSignTransaction(xdr);
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'LOBSTR signing failed.');
+      throw toSigningError(error);
     }
   }
 
