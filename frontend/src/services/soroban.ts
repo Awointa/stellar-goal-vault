@@ -1,4 +1,4 @@
-import { getNetworkDetails, requestAccess, signTransaction } from '@stellar/freighter-api';
+import { requestAccess, signTransaction } from '@stellar/freighter-api';
 import {
   Address,
   BASE_FEE,
@@ -8,6 +8,7 @@ import {
   rpc,
 } from '@stellar/stellar-sdk';
 import { getAppConfig } from './api';
+import { assertWalletNetworkMatches } from './freighter';
 import { SorobanRefundMetadata } from '../types/campaign';
 import { GoalVaultContract } from '../generated';
 
@@ -62,12 +63,7 @@ export async function submitRefundTransaction(
     );
   }
 
-  const networkDetails = await getNetworkDetails().catch(() => null);
-  if (networkDetails?.networkPassphrase && networkDetails.networkPassphrase !== networkPassphrase) {
-    throw new Error(
-      'Freighter is connected to a different Stellar network than the configured Soroban refund flow.',
-    );
-  }
+  await assertWalletNetworkMatches(networkPassphrase);
 
   const server = new rpc.Server(rpcUrl, {
     allowHttp: rpcUrl.startsWith('http://'),
@@ -96,6 +92,8 @@ export async function submitRefundTransaction(
   }
 
   transaction = rpc.assembleTransaction(transaction, simulation).build();
+
+  await assertWalletNetworkMatches(networkPassphrase);
 
   const signedXdr = await signTransaction(transaction.toXDR(), {
     accountToSign: walletAddress,

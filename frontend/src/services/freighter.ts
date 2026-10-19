@@ -39,17 +39,57 @@ function getRpcServer(rpcUrl: string): rpc.Server {
   return new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
 }
 
+const FUTURENET_PASSPHRASE = 'Test SDF Future Network ; October 2022';
+
 function networkLabel(passphrase: string | undefined): string {
   if (!passphrase) {
-    return 'unknown network';
+    return 'an unknown network';
   }
   if (passphrase === TESTNET_PASSPHRASE) {
-    return 'Stellar Testnet';
+    return 'Testnet';
   }
   if (passphrase === MAINNET_PASSPHRASE) {
-    return 'Stellar Mainnet';
+    return 'Public (Mainnet)';
   }
-  return 'the configured network';
+  if (passphrase === FUTURENET_PASSPHRASE) {
+    return 'Futurenet';
+  }
+  return `a custom network ("${passphrase}")`;
+}
+
+function networkMismatchMessage(walletPassphrase: string, expectedPassphrase: string): string {
+  const expected = networkLabel(expectedPassphrase);
+  return `Your wallet is on ${networkLabel(walletPassphrase)} but this app uses ${expected}. Switch your wallet network to ${expected} and retry.`;
+}
+
+/**
+ * Confirms that Freighter's currently selected network matches the app's
+ * configured network. Called immediately before signing so that a network
+ * switch made after connecting can never produce a submitted transaction.
+ * Fails closed when the wallet network cannot be determined.
+ */
+export async function assertWalletNetworkMatches(expectedNetworkPassphrase: string): Promise<void> {
+  let walletPassphrase: string | undefined;
+  try {
+    const networkDetails = await getNetworkDetails();
+    walletPassphrase = networkDetails?.networkPassphrase || undefined;
+  } catch {
+    walletPassphrase = undefined;
+  }
+
+  if (!walletPassphrase) {
+    throw buildError(
+      'FREIGHTER_NETWORK_UNKNOWN',
+      `Could not determine your wallet's network. Unlock Freighter, make sure it is set to ${networkLabel(expectedNetworkPassphrase)}, and retry.`,
+    );
+  }
+
+  if (walletPassphrase !== expectedNetworkPassphrase) {
+    throw buildError(
+      'FREIGHTER_NETWORK_MISMATCH',
+      networkMismatchMessage(walletPassphrase, expectedNetworkPassphrase),
+    );
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -150,7 +190,7 @@ export async function connectFreighterWallet(
   if (details?.networkPassphrase && details.networkPassphrase !== expectedNetworkPassphrase) {
     throw buildError(
       'FREIGHTER_NETWORK_MISMATCH',
-      `Freighter is connected to ${networkLabel(details.networkPassphrase)}, but this app expects ${networkLabel(expectedNetworkPassphrase)}.`,
+      networkMismatchMessage(details.networkPassphrase, expectedNetworkPassphrase),
     );
   }
 
@@ -209,6 +249,8 @@ export async function submitFreighterClaim(params: {
       'Wallet signing is not configured yet. Set CONTRACT_ID and SOROBAN_RPC_URL on the backend.',
     );
   }
+
+  await assertWalletNetworkMatches(config.networkPassphrase);
 
   const server = getRpcServer(config.sorobanRpcUrl);
   const sourceAccount = await server.getAccount(creator).catch((error) => {
@@ -271,6 +313,10 @@ export async function submitFreighterClaim(params: {
       throw buildError('USER_CANCELLED', 'User cancelled the transaction from the preview panel.');
     }
   }
+
+  // Re-check right before signing: the wallet network may have changed since
+  // connecting or while the preview was open.
+  await assertWalletNetworkMatches(config.networkPassphrase);
 
   let signedXdr: string;
   try {
@@ -337,6 +383,8 @@ export async function submitFreighterPledge(params: {
       'Wallet signing is not configured yet. Set CONTRACT_ID and SOROBAN_RPC_URL on the backend.',
     );
   }
+
+  await assertWalletNetworkMatches(config.networkPassphrase);
 
   const server = getRpcServer(config.sorobanRpcUrl);
   const amountUnits = amountToContractUnits(amount, config.contractAmountDecimals);
@@ -413,6 +461,10 @@ export async function submitFreighterPledge(params: {
       throw buildError('USER_CANCELLED', 'User cancelled the transaction from the preview panel.');
     }
   }
+
+  // Re-check right before signing: the wallet network may have changed since
+  // connecting or while the preview was open.
+  await assertWalletNetworkMatches(config.networkPassphrase);
 
   let signedXdr: string;
   try {
