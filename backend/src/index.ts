@@ -1159,6 +1159,18 @@ app.use((err: unknown, req: Request, res: Response, next: express.NextFunction) 
     });
   }
 
+  if (isErrorWithType(err, 'entity.parse.failed')) {
+    // The parser's message echoes fragments of the raw request body.
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_JSON',
+        message: 'Request body is not valid JSON.',
+        requestId: (req as RequestWithId).requestId,
+      },
+    });
+  }
+
   if (isErrorWithMessage(err) && err.message === 'Not allowed by CORS') {
     return res.status(403).json({
       success: false,
@@ -1172,12 +1184,24 @@ app.use((err: unknown, req: Request, res: Response, next: express.NextFunction) 
 
   const errorWithCode = err as { statusCode?: number; code?: string };
   const statusCode = err instanceof AppError ? err.statusCode : (errorWithCode.statusCode ?? 500);
-  const code = err instanceof AppError ? err.code : (errorWithCode.code ?? 'INTERNAL_SERVER_ERROR');
+  // Only application errors (AppError, or service errors carrying a client
+  // status and code) have messages written for clients. Anything else is an
+  // unexpected exception whose text may include internals, so it is replaced
+  // with a structured code and a generic message; details go to the log only.
+  const isClientFacingError =
+    err instanceof AppError ||
+    (typeof errorWithCode.code === 'string' && statusCode >= 400 && statusCode < 500);
+  const code = isClientFacingError
+    ? (errorWithCode.code ?? 'INTERNAL_SERVER_ERROR')
+    : 'INTERNAL_SERVER_ERROR';
   const response: ApiErrorResponse = {
     success: false,
     error: {
       code,
-      message: isErrorWithMessage(err) ? err.message : 'An unexpected error occurred',
+      message:
+        isClientFacingError && isErrorWithMessage(err)
+          ? err.message
+          : 'An unexpected error occurred',
       requestId: (req as RequestWithId).requestId,
     },
   };
