@@ -58,80 +58,50 @@ export function __setGetRpcServerImpl(impl: (rpcUrl: string) => rpc.Server): voi
   getRpcServerImpl = impl;
 }
 
-const FUTURENET_PASSPHRASE = 'Test SDF Future Network ; October 2022';
-
 function networkLabel(passphrase: string | undefined): string {
   if (!passphrase) {
-    return 'an unknown network';
+    return 'unknown network';
   }
   if (passphrase === TESTNET_PASSPHRASE) {
-    return 'Testnet';
+    return 'Stellar Testnet';
   }
   if (passphrase === MAINNET_PASSPHRASE) {
-    return 'Public (Mainnet)';
+    return 'Stellar Mainnet';
   }
-  if (passphrase === FUTURENET_PASSPHRASE) {
-    return 'Futurenet';
-  }
-  return `a custom network ("${passphrase}")`;
-}
-
-function networkMismatchMessage(walletPassphrase: string, expectedPassphrase: string): string {
-  const expected = networkLabel(expectedPassphrase);
-  return `Your wallet is on ${networkLabel(walletPassphrase)} but this app uses ${expected}. Switch your wallet network to ${expected} and retry.`;
-}
-
-/**
- * Confirms that Freighter's currently selected network matches the app's
- * configured network. Called immediately before signing so that a network
- * switch made after connecting can never produce a submitted transaction.
- * Fails closed when the wallet network cannot be determined.
- */
-export async function assertWalletNetworkMatches(expectedNetworkPassphrase: string): Promise<void> {
-  let walletPassphrase: string | undefined;
-  try {
-    const networkDetails = await getNetworkDetails();
-    walletPassphrase = networkDetails?.networkPassphrase || undefined;
-  } catch {
-    walletPassphrase = undefined;
-  }
-
-  if (!walletPassphrase) {
-    throw buildError(
-      'FREIGHTER_NETWORK_UNKNOWN',
-      `Could not determine your wallet's network. Unlock Freighter, make sure it is set to ${networkLabel(expectedNetworkPassphrase)}, and retry.`,
-    );
-  }
-
-  if (walletPassphrase !== expectedNetworkPassphrase) {
-    throw buildError(
-      'FREIGHTER_NETWORK_MISMATCH',
-      networkMismatchMessage(walletPassphrase, expectedNetworkPassphrase),
-    );
-  }
+  return 'the configured network';
 }
 
 /**
  * Verifies that the connected Freighter wallet is on the expected network.
- * Throws a FREIGHTER_NETWORK_MISMATCH error if the networks don't match.
+ * Called before building a transaction and again immediately before signing,
+ * so a network switch made after connecting (or while the preview is open)
+ * can never produce a submitted transaction.
+ *
+ * Throws FREIGHTER_NETWORK_MISMATCH when the networks differ, and fails closed
+ * with FREIGHTER_NETWORK_UNKNOWN when the wallet's network cannot be read.
  */
 export async function verifyFreighterNetwork(expectedNetworkPassphrase: string): Promise<void> {
+  let currentPassphrase: string | undefined;
   try {
     const details = await getNetworkDetails();
-    const currentPassphrase = details.networkPassphrase;
-    if (currentPassphrase !== expectedNetworkPassphrase) {
-      throw buildError(
-        'FREIGHTER_NETWORK_MISMATCH',
-        `Freighter is connected to ${networkLabel(currentPassphrase)}, but this app expects ${networkLabel(expectedNetworkPassphrase)}. ` +
-          `Please switch your wallet to ${networkLabel(expectedNetworkPassphrase)} and try again.`,
-      );
-    }
+    currentPassphrase = details?.networkPassphrase || undefined;
   } catch (error) {
-    if (error instanceof Error && (error as AppErrorLike).code === 'FREIGHTER_NETWORK_MISMATCH') {
-      throw error;
-    }
-    // If we can't get network details, we'll let the transaction simulation catch the mismatch
     console.warn('Could not verify Freighter network:', describeErrorForLog(error));
+  }
+
+  if (!currentPassphrase) {
+    throw buildError(
+      'FREIGHTER_NETWORK_UNKNOWN',
+      `Could not determine your wallet's network. Unlock Freighter, make sure it is set to ${networkLabel(expectedNetworkPassphrase)}, and try again.`,
+    );
+  }
+
+  if (currentPassphrase !== expectedNetworkPassphrase) {
+    throw buildError(
+      'FREIGHTER_NETWORK_MISMATCH',
+      `Freighter is connected to ${networkLabel(currentPassphrase)}, but this app expects ${networkLabel(expectedNetworkPassphrase)}. ` +
+        `Please switch your wallet to ${networkLabel(expectedNetworkPassphrase)} and try again.`,
+    );
   }
 }
 
@@ -230,7 +200,7 @@ export async function connectFreighterWallet(
   if (details?.networkPassphrase && details.networkPassphrase !== expectedNetworkPassphrase) {
     throw buildError(
       'FREIGHTER_NETWORK_MISMATCH',
-      networkMismatchMessage(details.networkPassphrase, expectedNetworkPassphrase),
+      `Freighter is connected to ${networkLabel(details.networkPassphrase)}, but this app expects ${networkLabel(expectedNetworkPassphrase)}.`,
     );
   }
 
@@ -351,7 +321,7 @@ export async function submitFreighterClaim(params: {
 
   // Re-check right before signing: the wallet network may have changed since
   // connecting or while the preview was open.
-  await assertWalletNetworkMatches(config.networkPassphrase);
+  await verifyFreighterNetwork(config.networkPassphrase);
 
   let signedXdr: string;
   try {
@@ -491,7 +461,7 @@ export async function submitFreighterPledge(params: {
 
   // Re-check right before signing: the wallet network may have changed since
   // connecting or while the preview was open.
-  await assertWalletNetworkMatches(config.networkPassphrase);
+  await verifyFreighterNetwork(config.networkPassphrase);
 
   let signedXdr: string;
   try {

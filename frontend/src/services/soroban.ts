@@ -1,4 +1,4 @@
-import { requestAccess, signTransaction } from '@stellar/freighter-api';
+import { getNetworkDetails, requestAccess, signTransaction } from '@stellar/freighter-api';
 import {
   Address,
   BASE_FEE,
@@ -8,7 +8,6 @@ import {
   rpc,
 } from '@stellar/stellar-sdk';
 import { getAppConfig } from './api';
-import { assertWalletNetworkMatches } from './freighter';
 import { SorobanRefundMetadata } from '../types/campaign';
 import { GoalVaultContract } from '../generated';
 import { verifyFreighterNetwork } from './freighter';
@@ -109,6 +108,9 @@ async function buildAndSubmitRefund(
   }
 
   transaction = rpc.assembleTransaction(transaction, simulation).build();
+
+  // Re-check right before signing in case the wallet network changed.
+  await verifyFreighterNetwork(networkPassphrase);
 
   let signedXdr: string;
   try {

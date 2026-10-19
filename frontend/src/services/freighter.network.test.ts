@@ -36,11 +36,7 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
   };
 });
 
-import {
-  assertWalletNetworkMatches,
-  submitFreighterClaim,
-  submitFreighterPledge,
-} from './freighter';
+import { verifyFreighterNetwork, submitFreighterClaim, submitFreighterPledge } from './freighter';
 
 const creator = Keypair.random().publicKey();
 
@@ -66,24 +62,25 @@ describe('wallet network mismatch guard', () => {
     freighterMocks.signTransaction.mockImplementation(async (xdr: string) => xdr);
   });
 
-  describe('assertWalletNetworkMatches', () => {
+  describe('verifyFreighterNetwork', () => {
     it('resolves when the wallet network matches the app network', async () => {
       walletOn(TESTNET);
-      await expect(assertWalletNetworkMatches(TESTNET)).resolves.toBeUndefined();
+      await expect(verifyFreighterNetwork(TESTNET)).resolves.toBeUndefined();
     });
 
     it('names both networks and the recovery step on mismatch', async () => {
       walletOn(PUBLIC);
-      await expect(assertWalletNetworkMatches(TESTNET)).rejects.toMatchObject({
+      await expect(verifyFreighterNetwork(TESTNET)).rejects.toMatchObject({
         code: 'FREIGHTER_NETWORK_MISMATCH',
         message:
-          'Your wallet is on Public (Mainnet) but this app uses Testnet. Switch your wallet network to Testnet and retry.',
+          'Freighter is connected to Stellar Mainnet, but this app expects Stellar Testnet. ' +
+          'Please switch your wallet to Stellar Testnet and try again.',
       });
     });
 
     it('fails closed when the wallet network cannot be read', async () => {
       freighterMocks.getNetworkDetails.mockRejectedValue(new Error('locked'));
-      await expect(assertWalletNetworkMatches(TESTNET)).rejects.toMatchObject({
+      await expect(verifyFreighterNetwork(TESTNET)).rejects.toMatchObject({
         code: 'FREIGHTER_NETWORK_UNKNOWN',
         message: expect.stringMatching(/Could not determine your wallet's network.*Testnet/),
       });
@@ -91,7 +88,7 @@ describe('wallet network mismatch guard', () => {
 
     it('fails closed when the wallet reports an empty network', async () => {
       walletOn('');
-      await expect(assertWalletNetworkMatches(TESTNET)).rejects.toMatchObject({
+      await expect(verifyFreighterNetwork(TESTNET)).rejects.toMatchObject({
         code: 'FREIGHTER_NETWORK_UNKNOWN',
       });
     });
