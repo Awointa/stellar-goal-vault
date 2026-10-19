@@ -35,8 +35,16 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function getRpcServer(rpcUrl: string): rpc.Server {
-  return new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
+// Exported for testing purposes - internal reference that can be mocked
+let getRpcServerImpl: (rpcUrl: string) => rpc.Server = (rpcUrl: string) =>
+  new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
+
+export function getRpcServer(rpcUrl: string): rpc.Server {
+  return getRpcServerImpl(rpcUrl);
+}
+
+export function __setGetRpcServerImpl(impl: (rpcUrl: string) => rpc.Server): void {
+  getRpcServerImpl = impl;
 }
 
 function networkLabel(passphrase: string | undefined): string {
