@@ -10,6 +10,7 @@ import {
 import { getAppConfig } from './api';
 import { SorobanRefundMetadata } from '../types/campaign';
 import { GoalVaultContract } from '../generated';
+import { verifyFreighterNetwork } from './freighter';
 
 function stringifyErrorDetails(value: unknown): string {
   if (typeof value === 'string' && value.trim().length > 0) {
@@ -62,12 +63,8 @@ export async function submitRefundTransaction(
     );
   }
 
-  const networkDetails = await getNetworkDetails().catch(() => null);
-  if (networkDetails?.networkPassphrase && networkDetails.networkPassphrase !== networkPassphrase) {
-    throw new Error(
-      'Freighter is connected to a different Stellar network than the configured Soroban refund flow.',
-    );
-  }
+  // Verify wallet network matches expected network before proceeding
+  await verifyFreighterNetwork(networkPassphrase);
 
   const server = new rpc.Server(rpcUrl, {
     allowHttp: rpcUrl.startsWith('http://'),

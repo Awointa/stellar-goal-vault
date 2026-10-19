@@ -25,6 +25,8 @@ export interface WalletAdapter {
   connect: (expectedNetworkPassphrase: string) => Promise<WalletConnection>;
   sign: (xdr: string, networkPassphrase: string, publicKey: string) => Promise<string>;
   disconnect: () => Promise<void> | void;
+  /** Verifies the wallet's current network matches the expected network passphrase. */
+  checkNetwork: (expectedNetworkPassphrase: string) => Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }>;
 }
 
 const WALLET_INFO: Record<WalletType, Omit<WalletInfo, 'detected'>> = {
@@ -153,6 +155,22 @@ class FreighterAdapter implements WalletAdapter {
   async disconnect(): Promise<void> {
     // Freighter doesn't have a disconnect method, just clear local state
   }
+
+  async checkNetwork(expectedNetworkPassphrase: string): Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }> {
+    try {
+      const details = await getNetworkDetails();
+      const currentPassphrase = details.networkPassphrase;
+      const match = currentPassphrase === expectedNetworkPassphrase;
+      return {
+        match,
+        currentNetwork: currentPassphrase,
+        expectedNetwork: expectedNetworkPassphrase,
+      };
+    } catch {
+      // If we can't get network details, assume it matches to avoid blocking
+      return { match: true };
+    }
+  }
 }
 
 // Rabet Adapter
@@ -202,6 +220,11 @@ class RabetAdapter implements WalletAdapter {
       await rabet.disconnect();
     }
   }
+
+  async checkNetwork(expectedNetworkPassphrase: string): Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }> {
+    // Rabet doesn't expose network details; assume match to avoid blocking
+    return { match: true, expectedNetwork: expectedNetworkPassphrase };
+  }
 }
 
 // xBull Adapter
@@ -242,6 +265,11 @@ class XbullAdapter implements WalletAdapter {
     // xBull doesn't have a disconnect method, just clear local state
     this.bridge = null;
   }
+
+  async checkNetwork(expectedNetworkPassphrase: string): Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }> {
+    // xBull doesn't expose network details; assume match to avoid blocking
+    return { match: true, expectedNetwork: expectedNetworkPassphrase };
+  }
 }
 
 // LOBSTR Adapter
@@ -272,6 +300,11 @@ class LobstrAdapter implements WalletAdapter {
 
   async disconnect(): Promise<void> {
     // LOBSTR doesn't have a disconnect method, just clear local state
+  }
+
+  async checkNetwork(expectedNetworkPassphrase: string): Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }> {
+    // LOBSTR doesn't expose network details; assume match to avoid blocking
+    return { match: true, expectedNetwork: expectedNetworkPassphrase };
   }
 }
 
