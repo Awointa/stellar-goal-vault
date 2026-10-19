@@ -648,14 +648,16 @@ function App() {
         },
       );
     } catch (error) {
-      if (
+      // Re-throw so the pledge form can show the exact transaction status
+      // (failed / retryable) inline; cancelling returns it to idle.
+      if (!(
         error &&
         typeof error === 'object' &&
         (error as { code?: string }).code === 'USER_CANCELLED'
-      ) {
-        return;
+      )) {
+        addToast(getErrorMessage(error), 'error');
       }
-      addToast(getErrorMessage(error), 'error');
+      throw error;
     } finally {
       setPendingPledgeCampaignId(null);
     }
