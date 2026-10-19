@@ -13,30 +13,49 @@ import {
   rpc,
 } from '@stellar/stellar-sdk';
 import { AppConfig, PledgeTransactionResult, WalletConnection } from '../types/campaign';
+import {
+  SIGNING_ERROR_MESSAGES,
+  SigningErrorClass,
+  classifyCause,
+  createSigningError,
+  describeErrorForLog,
+} from '../lib/signingErrors';
 
 type AppErrorLike = Error & { code?: string };
 
 const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
 const MAINNET_PASSPHRASE = 'Public Global Stellar Network ; September 2015';
 
+/** Error with an authored (safe) message; the signing error class comes from the code. */
 function buildError(code: string, message: string): AppErrorLike {
-  const error = new Error(message) as AppErrorLike;
-  error.code = code;
-  return error;
+  return createSigningError(code, { message });
 }
 
-function getErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-  if (typeof error === 'string' && error.trim().length > 0) {
-    return error;
-  }
-  return fallback;
+/**
+ * Error for a failure whose raw cause comes from the wallet, SDK, or RPC. The
+ * raw text is never used as the message; it is kept only as a redacted detail.
+ */
+function buildCausedError(
+  code: string,
+  cause: unknown,
+  fallbackClass: SigningErrorClass,
+): AppErrorLike {
+  return createSigningError(code, {
+    signingErrorClass: classifyCause(cause, fallbackClass),
+    cause,
+  });
 }
 
-function getRpcServer(rpcUrl: string): rpc.Server {
-  return new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
+// Exported for testing purposes - internal reference that can be mocked
+let getRpcServerImpl: (rpcUrl: string) => rpc.Server = (rpcUrl: string) =>
+  new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
+
+export function getRpcServer(rpcUrl: string): rpc.Server {
+  return getRpcServerImpl(rpcUrl);
+}
+
+export function __setGetRpcServerImpl(impl: (rpcUrl: string) => rpc.Server): void {
+  getRpcServerImpl = impl;
 }
 
 const FUTURENET_PASSPHRASE = 'Test SDF Future Network ; October 2022';
@@ -89,6 +108,30 @@ export async function assertWalletNetworkMatches(expectedNetworkPassphrase: stri
       'FREIGHTER_NETWORK_MISMATCH',
       networkMismatchMessage(walletPassphrase, expectedNetworkPassphrase),
     );
+  }
+}
+
+/**
+ * Verifies that the connected Freighter wallet is on the expected network.
+ * Throws a FREIGHTER_NETWORK_MISMATCH error if the networks don't match.
+ */
+export async function verifyFreighterNetwork(expectedNetworkPassphrase: string): Promise<void> {
+  try {
+    const details = await getNetworkDetails();
+    const currentPassphrase = details.networkPassphrase;
+    if (currentPassphrase !== expectedNetworkPassphrase) {
+      throw buildError(
+        'FREIGHTER_NETWORK_MISMATCH',
+        `Freighter is connected to ${networkLabel(currentPassphrase)}, but this app expects ${networkLabel(expectedNetworkPassphrase)}. ` +
+          `Please switch your wallet to ${networkLabel(expectedNetworkPassphrase)} and try again.`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && (error as AppErrorLike).code === 'FREIGHTER_NETWORK_MISMATCH') {
+      throw error;
+    }
+    // If we can't get network details, we'll let the transaction simulation catch the mismatch
+    console.warn('Could not verify Freighter network:', describeErrorForLog(error));
   }
 }
 
@@ -164,10 +207,7 @@ export async function connectFreighterWallet(
   try {
     publicKey = await requestAccess();
   } catch (error) {
-    throw buildError(
-      'FREIGHTER_ACCESS_DENIED',
-      getErrorMessage(error, 'Freighter access was rejected.'),
-    );
+    throw buildCausedError('FREIGHTER_ACCESS_DENIED', error, 'USER_REJECTED');
   }
 
   let details:
@@ -250,14 +290,12 @@ export async function submitFreighterClaim(params: {
     );
   }
 
-  await assertWalletNetworkMatches(config.networkPassphrase);
+  // Verify wallet network matches expected network before proceeding
+  await verifyFreighterNetwork(config.networkPassphrase);
 
   const server = getRpcServer(config.sorobanRpcUrl);
   const sourceAccount = await server.getAccount(creator).catch((error) => {
-    throw buildError(
-      'SOURCE_ACCOUNT_LOAD_FAILED',
-      getErrorMessage(error, 'Unable to load the creator account from Soroban RPC.'),
-    );
+    throw buildCausedError('SOURCE_ACCOUNT_LOAD_FAILED', error, 'RPC_FAILURE');
   });
 
   const operation = new Contract(config.contractId).call(
@@ -275,14 +313,14 @@ export async function submitFreighterClaim(params: {
     .build();
 
   const simulation = await server.simulateTransaction(transaction).catch((error) => {
-    throw buildError(
-      'SIMULATION_FAILED',
-      getErrorMessage(error, 'Unable to simulate the claim transaction.'),
-    );
+    throw createSigningError('SIMULATION_FAILED', {
+      signingErrorClass: 'RPC_FAILURE',
+      cause: error,
+    });
   });
 
   if ('error' in simulation) {
-    throw buildError('SIMULATION_FAILED', `Simulation failed: ${simulation.error}`);
+    throw buildCausedError('SIMULATION_FAILED', simulation.error, 'MALFORMED_TRANSACTION');
   }
 
   if ('restorePreamble' in simulation) {
@@ -296,10 +334,7 @@ export async function submitFreighterClaim(params: {
   try {
     preparedTransaction = rpc.assembleTransaction(transaction, simulation as any).build();
   } catch (error) {
-    throw buildError(
-      'SIMULATION_PREPARE_FAILED',
-      getErrorMessage(error, 'Failed to prepare the simulated claim transaction.'),
-    );
+    throw buildCausedError('SIMULATION_PREPARE_FAILED', error, 'MALFORMED_TRANSACTION');
   }
 
   if (params.onPreview) {
@@ -325,10 +360,7 @@ export async function submitFreighterClaim(params: {
       networkPassphrase: config.networkPassphrase,
     });
   } catch (error) {
-    throw buildError(
-      'SIGNING_FAILED',
-      getErrorMessage(error, 'Freighter rejected or failed to sign the claim transaction.'),
-    );
+    throw buildCausedError('SIGNING_FAILED', error, 'UNKNOWN');
   }
 
   if (!signedXdr) {
@@ -337,10 +369,10 @@ export async function submitFreighterClaim(params: {
 
   const signedTransaction = TransactionBuilder.fromXDR(signedXdr, config.networkPassphrase);
   const sendResult = await server.sendTransaction(signedTransaction).catch((error) => {
-    throw buildError(
-      'SUBMISSION_FAILED',
-      getErrorMessage(error, 'Failed to submit the signed claim transaction to Soroban RPC.'),
-    );
+    throw createSigningError('SUBMISSION_FAILED', {
+      signingErrorClass: 'RPC_FAILURE',
+      cause: error,
+    });
   });
 
   if (sendResult.status === 'ERROR') {
@@ -384,7 +416,8 @@ export async function submitFreighterPledge(params: {
     );
   }
 
-  await assertWalletNetworkMatches(config.networkPassphrase);
+  // Verify wallet network matches expected network before proceeding
+  await verifyFreighterNetwork(config.networkPassphrase);
 
   const server = getRpcServer(config.sorobanRpcUrl);
   const amountUnits = amountToContractUnits(amount, config.contractAmountDecimals);
@@ -398,10 +431,7 @@ export async function submitFreighterPledge(params: {
   }
 
   const sourceAccount = await server.getAccount(contributor).catch((error) => {
-    throw buildError(
-      'SOURCE_ACCOUNT_LOAD_FAILED',
-      getErrorMessage(error, 'Unable to load the contributor account from Soroban RPC.'),
-    );
+    throw buildCausedError('SOURCE_ACCOUNT_LOAD_FAILED', error, 'RPC_FAILURE');
   });
 
   const operation = new Contract(config.contractId).call(
@@ -421,14 +451,14 @@ export async function submitFreighterPledge(params: {
     .build();
 
   const simulation = await server.simulateTransaction(transaction).catch((error) => {
-    throw buildError(
-      'SIMULATION_FAILED',
-      getErrorMessage(error, 'Unable to simulate the pledge transaction.'),
-    );
+    throw createSigningError('SIMULATION_FAILED', {
+      signingErrorClass: 'RPC_FAILURE',
+      cause: error,
+    });
   });
 
   if ('error' in simulation) {
-    throw buildError('SIMULATION_FAILED', `Simulation failed: ${simulation.error}`);
+    throw buildCausedError('SIMULATION_FAILED', simulation.error, 'MALFORMED_TRANSACTION');
   }
 
   if ('restorePreamble' in simulation) {
@@ -442,10 +472,7 @@ export async function submitFreighterPledge(params: {
   try {
     preparedTransaction = rpc.assembleTransaction(transaction, simulation as any).build();
   } catch (error) {
-    throw buildError(
-      'SIMULATION_PREPARE_FAILED',
-      getErrorMessage(error, 'Failed to prepare the simulated transaction.'),
-    );
+    throw buildCausedError('SIMULATION_PREPARE_FAILED', error, 'MALFORMED_TRANSACTION');
   }
 
   if (params.onPreview) {
@@ -473,10 +500,7 @@ export async function submitFreighterPledge(params: {
       networkPassphrase: config.networkPassphrase,
     });
   } catch (error) {
-    throw buildError(
-      'SIGNING_FAILED',
-      getErrorMessage(error, 'Freighter rejected or failed to sign the transaction.'),
-    );
+    throw buildCausedError('SIGNING_FAILED', error, 'UNKNOWN');
   }
 
   if (!signedXdr) {
@@ -485,17 +509,17 @@ export async function submitFreighterPledge(params: {
 
   const signedTransaction = TransactionBuilder.fromXDR(signedXdr, config.networkPassphrase);
   const sendResult = await server.sendTransaction(signedTransaction).catch((error) => {
-    throw buildError(
-      'SUBMISSION_FAILED',
-      getErrorMessage(error, 'Failed to submit the signed transaction to Soroban RPC.'),
-    );
+    throw createSigningError('SUBMISSION_FAILED', {
+      signingErrorClass: 'RPC_FAILURE',
+      cause: error,
+    });
   });
 
   if (sendResult.status === 'ERROR') {
-    throw buildError(
-      'SUBMISSION_FAILED',
-      `Soroban RPC rejected the transaction ${sendResult.hash}.`,
-    );
+    throw createSigningError('SUBMISSION_FAILED', {
+      signingErrorClass: 'CONTRACT_REJECTED',
+      message: `Soroban RPC rejected the transaction ${sendResult.hash}. ${SIGNING_ERROR_MESSAGES.CONTRACT_REJECTED}`,
+    });
   }
 
   if (sendResult.status === 'TRY_AGAIN_LATER') {

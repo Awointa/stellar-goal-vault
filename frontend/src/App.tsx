@@ -90,6 +90,10 @@ function round(value: number): number {
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
+    // Network mismatch errors already contain actionable guidance
+    if ((error as { code?: string }).code === 'FREIGHTER_NETWORK_MISMATCH') {
+      return error.message;
+    }
     return error.message;
   }
   if (typeof error === 'string' && error.trim().length > 0) {

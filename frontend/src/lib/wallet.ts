@@ -10,6 +10,7 @@ import {
   signTransaction as lobstrSignTransaction,
 } from '@lobstrco/signer-extension-api';
 import { WalletConnection } from '../types/campaign';
+import { toSigningError } from './signingErrors';
 
 export type WalletType = 'freighter' | 'rabet' | 'xbull' | 'lobstr';
 
@@ -25,6 +26,8 @@ export interface WalletAdapter {
   connect: (expectedNetworkPassphrase: string) => Promise<WalletConnection>;
   sign: (xdr: string, networkPassphrase: string, publicKey: string) => Promise<string>;
   disconnect: () => Promise<void> | void;
+  /** Verifies the wallet's current network matches the expected network passphrase. */
+  checkNetwork: (expectedNetworkPassphrase: string) => Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }>;
 }
 
 const WALLET_INFO: Record<WalletType, Omit<WalletInfo, 'detected'>> = {
@@ -144,14 +147,34 @@ class FreighterAdapter implements WalletAdapter {
   }
 
   async sign(xdr: string, networkPassphrase: string, publicKey: string): Promise<string> {
-    return await signTransaction(xdr, {
-      accountToSign: publicKey,
-      networkPassphrase,
-    });
+    try {
+      return await signTransaction(xdr, {
+        accountToSign: publicKey,
+        networkPassphrase,
+      });
+    } catch (error) {
+      throw toSigningError(error);
+    }
   }
 
   async disconnect(): Promise<void> {
     // Freighter doesn't have a disconnect method, just clear local state
+  }
+
+  async checkNetwork(expectedNetworkPassphrase: string): Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }> {
+    try {
+      const details = await getNetworkDetails();
+      const currentPassphrase = details.networkPassphrase;
+      const match = currentPassphrase === expectedNetworkPassphrase;
+      return {
+        match,
+        currentNetwork: currentPassphrase,
+        expectedNetwork: expectedNetworkPassphrase,
+      };
+    } catch {
+      // If we can't get network details, assume it matches to avoid blocking
+      return { match: true };
+    }
   }
 }
 
@@ -192,7 +215,7 @@ class RabetAdapter implements WalletAdapter {
       }
       return result.xdr;
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'Rabet signing failed.');
+      throw toSigningError(error);
     }
   }
 
@@ -201,6 +224,11 @@ class RabetAdapter implements WalletAdapter {
     if (rabet && typeof rabet.disconnect === 'function') {
       await rabet.disconnect();
     }
+  }
+
+  async checkNetwork(expectedNetworkPassphrase: string): Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }> {
+    // Rabet doesn't expose network details; assume match to avoid blocking
+    return { match: true, expectedNetwork: expectedNetworkPassphrase };
   }
 }
 
@@ -234,13 +262,18 @@ class XbullAdapter implements WalletAdapter {
       const bridge = this.getBridge();
       return await bridge.sign({ xdr, publicKey, network: networkPassphrase });
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'xBull signing failed.');
+      throw toSigningError(error);
     }
   }
 
   async disconnect(): Promise<void> {
     // xBull doesn't have a disconnect method, just clear local state
     this.bridge = null;
+  }
+
+  async checkNetwork(expectedNetworkPassphrase: string): Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }> {
+    // xBull doesn't expose network details; assume match to avoid blocking
+    return { match: true, expectedNetwork: expectedNetworkPassphrase };
   }
 }
 
@@ -266,12 +299,17 @@ class LobstrAdapter implements WalletAdapter {
     try {
       return await lobstrSignTransaction(xdr);
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'LOBSTR signing failed.');
+      throw toSigningError(error);
     }
   }
 
   async disconnect(): Promise<void> {
     // LOBSTR doesn't have a disconnect method, just clear local state
+  }
+
+  async checkNetwork(expectedNetworkPassphrase: string): Promise<{ match: boolean; currentNetwork?: string; expectedNetwork?: string }> {
+    // LOBSTR doesn't expose network details; assume match to avoid blocking
+    return { match: true, expectedNetwork: expectedNetworkPassphrase };
   }
 }
 

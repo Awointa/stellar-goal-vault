@@ -197,6 +197,23 @@ Or the simulation step shows a fee error before Freighter even opens.
 
 ---
 
+### Signing error messages
+
+Signing and submission failures are grouped into a fixed set of classes (see [`frontend/src/lib/signingErrors.ts`](../frontend/src/lib/signingErrors.ts)). The app shows the message for the class, never the raw wallet or RPC error text:
+
+| Class | Meaning | What to do |
+| --- | --- | --- |
+| `USER_REJECTED` | You declined the request in your wallet | Click the button again to retry |
+| `WALLET_UNAVAILABLE` | Freighter is missing, locked, or on the wrong network | Install or unlock Freighter, then reconnect |
+| `MALFORMED_TRANSACTION` | The transaction couldn't be built or simulated from the inputs | Check the amount and campaign, then try again |
+| `RPC_FAILURE` | Soroban RPC timed out or couldn't be reached | Check your connection and retry |
+| `CONTRACT_REJECTED` | The contract or ledger rejected the transaction | Check the campaign status and your balance |
+| `UNKNOWN` | Anything else | Refresh the page and try again |
+
+Raw error text is kept only as a redacted diagnostic `detail`: Stellar secret seeds (`S…`) and transaction XDR are stripped and the text is truncated. The backend likewise returns structured error codes and replaces unexpected exception text with `INTERNAL_SERVER_ERROR`.
+
+---
+
 ## What Happens Under the Hood
 
 For contributors curious about the implementation:
