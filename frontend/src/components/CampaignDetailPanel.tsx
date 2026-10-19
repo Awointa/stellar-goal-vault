@@ -233,6 +233,9 @@ export function CampaignDetailPanel({
   // opens. If that simulation fails, surface a retry-able error next to the
   // pledge button instead of only relying on the toast.
   const selectedToken = pledgeToken || activeCampaign.assetCode;
+  const availableTokens = Array.from(
+    new Set([...(activeCampaign.acceptedTokens ?? []), activeCampaign.assetCode]),
+  );
 
   async function submitPledge() {
     if (pledgeInFlightRef.current || isPledgePending) {

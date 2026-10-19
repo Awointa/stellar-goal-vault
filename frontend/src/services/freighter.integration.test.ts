@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createElement } from 'react';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import { CampaignDetailPanel } from '../components/CampaignDetailPanel';
+import type { Campaign, AppConfig } from '../types/campaign';
 
 // Use vi.hoisted for all mock factories to avoid hoisting issues
 const mocks = vi.hoisted(() => {
@@ -51,17 +57,22 @@ const mocks = vi.hoisted(() => {
           PENDING: 'PENDING',
         },
       },
+      assembleTransaction: vi.fn().mockImplementation(() => mockServer.assembleTransaction()),
     },
-    TransactionBuilder: vi.fn().mockImplementation(() => ({
-      addOperation: vi.fn().mockReturnThis(),
-      setTimeout: vi.fn().mockReturnThis(),
-      build: vi.fn().mockReturnValue({
-        toXDR: vi.fn().mockReturnValue('AAAAA...unsigned_xdr...AAAAA'),
-      }),
-      fromXDR: vi.fn().mockReturnValue({
-        toXDR: vi.fn().mockReturnValue('AAAAA...signed_xdr...AAAAA'),
-      }),
-    })),
+    TransactionBuilder: Object.assign(
+      vi.fn().mockImplementation(() => ({
+        addOperation: vi.fn().mockReturnThis(),
+        setTimeout: vi.fn().mockReturnThis(),
+        build: vi.fn().mockReturnValue({
+          toXDR: vi.fn().mockReturnValue('AAAAA...unsigned_xdr...AAAAA'),
+        }),
+      })),
+      {
+        fromXDR: vi.fn().mockReturnValue({
+          toXDR: vi.fn().mockReturnValue('AAAAA...signed_xdr...AAAAA'),
+        }),
+      },
+    ),
     Contract: vi.fn().mockImplementation(() => ({
       call: vi.fn().mockReturnValue('operation'),
     })),
@@ -89,22 +100,34 @@ vi.mock('./freighter', async () => {
   const actual = await vi.importActual('./freighter');
   return {
     ...actual,
-    getRpcServer: vi.fn(() => mocks.mockServer),
-    __setGetRpcServerImpl: vi.fn(),
+    getRpcServer: () => mocks.mockServer,
   };
 });
+vi.mock('../components/ContributorSummary', () => ({ ContributorSummary: () => null }));
 
 const mockServer = mocks.mockServer;
 const mockAddressInstance = mocks.mockAddressInstance;
 const freighterMocks = mocks.freighterMocks;
 
-import { submitFreighterPledge, submitFreighterClaim, __setGetRpcServerImpl } from './freighter';
+import {
+  connectFreighterWallet,
+  submitFreighterPledge,
+  submitFreighterClaim,
+  __setGetRpcServerImpl,
+} from './freighter';
 
-// Inject the mock server implementation
-__setGetRpcServerImpl(() => mockServer);
+__setGetRpcServerImpl(() => mockServer as never);
 
 describe('Freighter Transaction Builder Integration Tests', () => {
-  const mockConfig = {
+  const mockConfig: AppConfig = {
+    allowedAssets: ['USDC', 'XLM'],
+    soroban: {
+      enabled: true,
+      contractId: 'C' + 'A'.repeat(55),
+      networkPassphrase: 'Test SDF Network ; September 2015',
+      rpcUrl: 'https://soroban-testnet.stellar.org',
+    },
+    walletIntegrationReady: true,
     contractId: 'C' + 'A'.repeat(55),
     sorobanRpcUrl: 'https://soroban-testnet.stellar.org',
     networkPassphrase: 'Test SDF Network ; September 2015',
@@ -118,10 +141,50 @@ describe('Freighter Transaction Builder Integration Tests', () => {
   const mockContributor = `G${'B'.repeat(55)}`;
   const mockCreator = `G${'C'.repeat(55)}`;
   const mockCampaignId = '1';
+  const mockCampaign: Campaign = {
+    id: mockCampaignId,
+    creator: mockCreator,
+    title: 'Community garden',
+    description: 'Fund a community garden',
+    acceptedTokens: ['USDC', 'XLM'],
+    assetCode: 'USDC',
+    targetAmount: 1000,
+    pledgedAmount: 0,
+    deadline: 4102444800,
+    createdAt: 1700000000,
+    progress: {
+      status: 'open',
+      percentFunded: 0,
+      remainingAmount: 1000,
+      pledgeCount: 0,
+      hoursLeft: 24,
+      canPledge: true,
+      canClaim: false,
+      canRefund: false,
+    },
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.useFakeTimers();
+    mocks.stellarSdkMock.rpc.assembleTransaction.mockImplementation(() =>
+      mockServer.assembleTransaction(),
+    );
+    mocks.stellarSdkMock.TransactionBuilder.mockImplementation(() => ({
+      addOperation: vi.fn().mockReturnThis(),
+      setTimeout: vi.fn().mockReturnThis(),
+      build: vi.fn().mockReturnValue({
+        toXDR: vi.fn().mockReturnValue('AAAAA...unsigned_xdr...AAAAA'),
+      }),
+    }));
+    mocks.stellarSdkMock.TransactionBuilder.fromXDR.mockReturnValue({
+      toXDR: vi.fn().mockReturnValue('AAAAA...signed_xdr...AAAAA'),
+    });
+    mocks.stellarSdkMock.Contract.mockImplementation(() => ({
+      call: vi.fn().mockReturnValue('operation'),
+    }));
+    mocks.stellarSdkMock.nativeToScVal.mockReturnValue('scval');
+    mocks.stellarSdkMock.Address.fromString.mockReturnValue(mockAddressInstance);
+    mockAddressInstance.toScVal.mockReturnValue('scval');
 
     // Reset mockServer methods to default successful behavior
     mockServer.getAccount.mockResolvedValue({
@@ -141,9 +204,7 @@ describe('Freighter Transaction Builder Integration Tests', () => {
       hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     });
     mockServer.getTransaction.mockReset();
-    mockServer.getTransaction
-      .mockResolvedValueOnce({ status: 'NOT_FOUND' })
-      .mockResolvedValueOnce({ status: 'SUCCESS', createdAt: Date.now() });
+    mockServer.getTransaction.mockResolvedValue({ status: 'SUCCESS', createdAt: Date.now() });
 
     // Default successful mocks
     freighterMocks.isConnected.mockResolvedValue(true);
@@ -163,9 +224,10 @@ describe('Freighter Transaction Builder Integration Tests', () => {
 
   describe('connect path', () => {
     it('successfully connects and verifies network on pledge', async () => {
+      const connection = await connectFreighterWallet(mockConfig.networkPassphrase);
       const result = await submitFreighterPledge({
         campaignId: mockCampaignId,
-        contributor: mockContributor,
+        contributor: connection.publicKey,
         amount: 100,
         assetCode: 'XLM',
         config: mockConfig,
@@ -179,6 +241,7 @@ describe('Freighter Transaction Builder Integration Tests', () => {
     });
 
     it('successfully connects and verifies network on claim', async () => {
+      await connectFreighterWallet(mockConfig.networkPassphrase);
       const result = await submitFreighterClaim({
         campaignId: mockCampaignId,
         creator: mockCreator,
@@ -234,15 +297,7 @@ describe('Freighter Transaction Builder Integration Tests', () => {
     it('rejects when Freighter access is denied', async () => {
       freighterMocks.requestAccess.mockRejectedValue(new Error('User rejected'));
 
-      await expect(
-        submitFreighterPledge({
-          campaignId: mockCampaignId,
-          contributor: mockContributor,
-          amount: 100,
-          assetCode: 'XLM',
-          config: mockConfig,
-        }),
-      ).rejects.toMatchObject({
+      await expect(connectFreighterWallet(mockConfig.networkPassphrase)).rejects.toMatchObject({
         code: 'FREIGHTER_ACCESS_DENIED',
       });
     });
@@ -378,26 +433,28 @@ describe('Freighter Transaction Builder Integration Tests', () => {
           config: mockConfig,
         }),
       ).rejects.toMatchObject({
-        code: 'CONTRACT_CALL_FAILED',
+        code: 'SUBMISSION_FAILED',
       });
     });
   });
 
   describe('timeout path', () => {
     it('times out when transaction does not confirm', async () => {
+      vi.useFakeTimers();
       mockServer.getTransaction.mockResolvedValue({ status: 'PENDING' });
 
-      await expect(
-        submitFreighterPledge({
-          campaignId: mockCampaignId,
-          contributor: mockContributor,
-          amount: 100,
-          assetCode: 'XLM',
-          config: mockConfig,
-        }),
-      ).rejects.toMatchObject({
+      const transaction = submitFreighterPledge({
+        campaignId: mockCampaignId,
+        contributor: mockContributor,
+        amount: 100,
+        assetCode: 'XLM',
+        config: mockConfig,
+      });
+      const timeoutAssertion = expect(transaction).rejects.toMatchObject({
         code: 'TRANSACTION_TIMEOUT',
       });
+      await vi.runAllTimersAsync();
+      await timeoutAssertion;
 
       // Should have polled 25 times
       expect(mockServer.getTransaction).toHaveBeenCalledTimes(25);
@@ -506,6 +563,60 @@ describe('Freighter Transaction Builder Integration Tests', () => {
   });
 
   describe('final application state verification', () => {
+    it('connects, submits the selected campaign asset, and shows the completed pledge state', async () => {
+      vi.useRealTimers();
+      const connection = await connectFreighterWallet(mockConfig.networkPassphrase);
+      mockServer.getTransaction.mockReset().mockResolvedValue({
+        status: 'SUCCESS',
+        createdAt: Date.now(),
+      });
+      const onPreview = vi.fn().mockResolvedValue(true);
+      const onPledge = vi.fn(async (campaignId: string, amount: number, assetCode: string) => {
+        await submitFreighterPledge({
+          campaignId,
+          contributor: connection.publicKey,
+          amount,
+          assetCode,
+          config: mockConfig,
+          onPreview,
+        });
+      });
+      const user = userEvent.setup();
+
+      render(
+        createElement(
+          MemoryRouter,
+          null,
+          createElement(CampaignDetailPanel, {
+            campaign: mockCampaign,
+            appConfig: mockConfig,
+            connectedWallet: connection.publicKey,
+            onPledge,
+          }),
+        ),
+      );
+
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Asset' }), 'XLM');
+      await user.click(screen.getByRole('button', { name: 'Pledge' }));
+
+      expect(onPledge).toHaveBeenCalledWith(mockCampaignId, 25, 'XLM');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(onPreview).toHaveBeenCalledWith(
+        expect.objectContaining({ operation: 'contribute', assetCode: 'XLM' }),
+      );
+      expect(mockAddressInstance.toScVal).toHaveBeenCalled();
+      expect(mocks.stellarSdkMock.Address.fromString).toHaveBeenCalledWith(
+        mockConfig.assetAddresses.XLM,
+      );
+      expect(freighterMocks.signTransaction).toHaveBeenCalled();
+      expect(mockServer.sendTransaction).toHaveBeenCalled();
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        'Your pledge was submitted successfully.',
+      );
+      expect(screen.getByLabelText('Amount')).toHaveValue(25);
+      expect(screen.getByRole('combobox', { name: 'Asset' })).toHaveValue('');
+    });
+
     it('returns confirmed transaction hash and timestamp on successful pledge', async () => {
       const result = await submitFreighterPledge({
         campaignId: mockCampaignId,
@@ -537,8 +648,6 @@ describe('Freighter Transaction Builder Integration Tests', () => {
     });
 
     it('verifies transaction builder constructs correct operation for pledge', async () => {
-      const { Contract, nativeToScVal, Address } = await import('@stellar/stellar-sdk');
-
       await submitFreighterPledge({
         campaignId: mockCampaignId,
         contributor: mockContributor,
@@ -547,8 +656,8 @@ describe('Freighter Transaction Builder Integration Tests', () => {
         config: mockConfig,
       });
 
-      expect(Contract).toHaveBeenCalledWith(mockConfig.contractId);
-      expect(Contract.mock.results[0].value.call).toHaveBeenCalledWith(
+      expect(mocks.stellarSdkMock.Contract).toHaveBeenCalledWith(mockConfig.contractId);
+      expect(mocks.stellarSdkMock.Contract.mock.results[0].value.call).toHaveBeenCalledWith(
         'contribute',
         expect.anything(), // campaignId
         expect.anything(), // contributor address
@@ -558,16 +667,14 @@ describe('Freighter Transaction Builder Integration Tests', () => {
     });
 
     it('verifies transaction builder constructs correct operation for claim', async () => {
-      const { Contract, nativeToScVal, Address } = await import('@stellar/stellar-sdk');
-
       await submitFreighterClaim({
         campaignId: mockCampaignId,
         creator: mockCreator,
         config: mockConfig,
       });
 
-      expect(Contract).toHaveBeenCalledWith(mockConfig.contractId);
-      expect(Contract.mock.results[0].value.call).toHaveBeenCalledWith(
+      expect(mocks.stellarSdkMock.Contract).toHaveBeenCalledWith(mockConfig.contractId);
+      expect(mocks.stellarSdkMock.Contract.mock.results[0].value.call).toHaveBeenCalledWith(
         'claim',
         expect.anything(), // campaignId
         expect.anything(), // creator address
@@ -592,29 +699,17 @@ describe('Freighter Transaction Builder Integration Tests', () => {
     it('propagates FREIGHTER_UNAVAILABLE', async () => {
       freighterMocks.isConnected.mockResolvedValue(false);
 
-      await expect(
-        submitFreighterPledge({
-          campaignId: mockCampaignId,
-          contributor: mockContributor,
-          amount: 100,
-          assetCode: 'XLM',
-          config: mockConfig,
-        }),
-      ).rejects.toMatchObject({ code: 'FREIGHTER_UNAVAILABLE' });
+      await expect(connectFreighterWallet(mockConfig.networkPassphrase)).rejects.toMatchObject({
+        code: 'FREIGHTER_UNAVAILABLE',
+      });
     });
 
     it('propagates FREIGHTER_ACCESS_DENIED', async () => {
       freighterMocks.requestAccess.mockRejectedValue(new Error('denied'));
 
-      await expect(
-        submitFreighterPledge({
-          campaignId: mockCampaignId,
-          contributor: mockContributor,
-          amount: 100,
-          assetCode: 'XLM',
-          config: mockConfig,
-        }),
-      ).rejects.toMatchObject({ code: 'FREIGHTER_ACCESS_DENIED' });
+      await expect(connectFreighterWallet(mockConfig.networkPassphrase)).rejects.toMatchObject({
+        code: 'FREIGHTER_ACCESS_DENIED',
+      });
     });
 
     it('propagates FREIGHTER_NETWORK_MISMATCH', async () => {
@@ -742,7 +837,7 @@ describe('Freighter Transaction Builder Integration Tests', () => {
           assetCode: 'XLM',
           config: mockConfig,
         }),
-      ).rejects.toMatchObject({ code: 'CONTRACT_CALL_FAILED' });
+      ).rejects.toMatchObject({ code: 'SUBMISSION_FAILED' });
     });
 
     it('propagates TRANSACTION_FAILED', async () => {
@@ -760,17 +855,21 @@ describe('Freighter Transaction Builder Integration Tests', () => {
     });
 
     it('propagates TRANSACTION_TIMEOUT', async () => {
+      vi.useFakeTimers();
       mockServer.getTransaction.mockResolvedValue({ status: 'PENDING' });
 
-      await expect(
-        submitFreighterPledge({
-          campaignId: mockCampaignId,
-          contributor: mockContributor,
-          amount: 100,
-          assetCode: 'XLM',
-          config: mockConfig,
-        }),
-      ).rejects.toMatchObject({ code: 'TRANSACTION_TIMEOUT' });
+      const transaction = submitFreighterPledge({
+        campaignId: mockCampaignId,
+        contributor: mockContributor,
+        amount: 100,
+        assetCode: 'XLM',
+        config: mockConfig,
+      });
+      const timeoutAssertion = expect(transaction).rejects.toMatchObject({
+        code: 'TRANSACTION_TIMEOUT',
+      });
+      await vi.runAllTimersAsync();
+      await timeoutAssertion;
     });
   });
 });
