@@ -277,13 +277,14 @@ async function waitForTransaction(
  * - PENDING / DUPLICATE → poll until SUCCESS (confirmed) or FAILED (failed).
  * - TRY_AGAIN_LATER and transport errors → resend the *same* envelope, so the
  *   network can include it at most once; when attempts run out → retryable.
- * - ERROR → TRANSACTION_REJECTED carrying the Stellar result code (e.g.
- *   txBadSeq, txInsufficientBalance), unless an earlier ambiguous attempt
- *   already landed, in which case the original is polled instead.
+ * - ERROR → `rejectedCode` (CONTRACT_REJECTED) carrying the Stellar result
+ *   code (e.g. txBadSeq, txInsufficientBalance), unless an earlier ambiguous
+ *   attempt already landed, in which case the original is polled instead.
  */
 export async function sendAndConfirmTransaction(
   server: rpc.Server,
   signedTransaction: Transaction,
+  rejectedCode = 'TRANSACTION_REJECTED',
 ): Promise<ConfirmedTransaction> {
   const transactionHash = transactionHashHex(signedTransaction);
 
@@ -295,7 +296,7 @@ export async function sendAndConfirmTransaction(
       if (attempt >= MAX_SEND_ATTEMPTS) {
         throw buildSubmittedError(
           'SUBMISSION_RETRY',
-          `${getErrorMessage(error, 'Soroban RPC could not be reached.')} Retry to resubmit the same transaction.`,
+          'Soroban RPC could not be reached. Retry to resubmit the same transaction.',
           signedTransaction,
         );
       }
@@ -336,10 +337,10 @@ export async function sendAndConfirmTransaction(
       resultCode = undefined;
     }
     throw Object.assign(
-      buildError(
-        'TRANSACTION_REJECTED',
-        `Soroban RPC rejected transaction ${transactionHash}${resultCode ? ` (${resultCode})` : ''}.`,
-      ),
+      createSigningError(rejectedCode, {
+        signingErrorClass: 'CONTRACT_REJECTED',
+        message: `Soroban RPC rejected transaction ${transactionHash}${resultCode ? ` (${resultCode})` : ''}. ${SIGNING_ERROR_MESSAGES.CONTRACT_REJECTED}`,
+      }),
       { resultCode, transactionHash },
     );
   }
@@ -369,7 +370,7 @@ export async function resumeSubmittedTransaction(
   } catch (error) {
     throw buildSubmittedError(
       'RPC_UNAVAILABLE',
-      getErrorMessage(error, 'Soroban RPC could not be reached. Retry in a moment.'),
+      'Soroban RPC could not be reached. Retry in a moment.',
       signedTransaction,
     );
   }
@@ -484,29 +485,11 @@ export async function submitFreighterClaim(params: {
     throw buildError('SIGNING_FAILED', 'Freighter did not return a signed transaction.');
   }
 
-  const signedTransaction = TransactionBuilder.fromXDR(signedXdr, config.networkPassphrase);
-  const sendResult = await server.sendTransaction(signedTransaction).catch((error) => {
-    throw createSigningError('SUBMISSION_FAILED', {
-      signingErrorClass: 'RPC_FAILURE',
-      cause: error,
-    });
-  });
-
-  if (sendResult.status === 'ERROR') {
-    throw buildError(
-      'CONTRACT_CALL_FAILED',
-      `Soroban RPC rejected the claim transaction ${sendResult.hash}.`,
-    );
-  }
-
-  if (sendResult.status === 'TRY_AGAIN_LATER') {
-    throw buildError(
-      'SUBMISSION_RETRY',
-      'Soroban RPC asked the client to retry claim submission later.',
-    );
-  }
-
-  return waitForTransaction(server, sendResult.hash);
+  const signedTransaction = TransactionBuilder.fromXDR(
+    signedXdr,
+    config.networkPassphrase,
+  ) as Transaction;
+  return sendAndConfirmTransaction(server, signedTransaction, 'CONTRACT_CALL_FAILED');
 }
 
 export async function submitFreighterPledge(params: {
@@ -620,29 +603,11 @@ export async function submitFreighterPledge(params: {
     throw buildError('SIGNING_FAILED', 'Freighter did not return a signed transaction.');
   }
 
-  const signedTransaction = TransactionBuilder.fromXDR(signedXdr, config.networkPassphrase);
-  const sendResult = await server.sendTransaction(signedTransaction).catch((error) => {
-    throw createSigningError('SUBMISSION_FAILED', {
-      signingErrorClass: 'RPC_FAILURE',
-      cause: error,
-    });
-  });
-
-  if (sendResult.status === 'ERROR') {
-    throw createSigningError('SUBMISSION_FAILED', {
-      signingErrorClass: 'CONTRACT_REJECTED',
-      message: `Soroban RPC rejected the transaction ${sendResult.hash}. ${SIGNING_ERROR_MESSAGES.CONTRACT_REJECTED}`,
-    });
-  }
-
-  if (sendResult.status === 'TRY_AGAIN_LATER') {
-    throw buildError(
-      'SUBMISSION_RETRY',
-      'Soroban RPC asked the client to retry transaction submission later.',
-    );
-  }
-
-  return waitForTransaction(server, sendResult.hash);
+  const signedTransaction = TransactionBuilder.fromXDR(
+    signedXdr,
+    config.networkPassphrase,
+  ) as Transaction;
+  return sendAndConfirmTransaction(server, signedTransaction, 'SUBMISSION_FAILED');
 }
 
 export function watchFreighterAccount(onChange: (address: string) => void): () => void {

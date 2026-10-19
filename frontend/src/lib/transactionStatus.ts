@@ -50,7 +50,8 @@ function asCoded(error: unknown): CodedError {
 /** Maps a submission error to a terminal status. Same input → same output. */
 export function classifyTransactionError(error: unknown): 'failed' | 'retryable' {
   const { code, resultCode } = asCoded(error);
-  if (code === 'TRANSACTION_REJECTED') {
+  // A rejected submission carries the Stellar result code whatever its app code.
+  if (code === 'TRANSACTION_REJECTED' || resultCode !== undefined) {
     return resultCode && RETRYABLE_RESULT_CODES.has(resultCode) ? 'retryable' : 'failed';
   }
   if (code && RETRYABLE_ERROR_CODES.has(code)) {

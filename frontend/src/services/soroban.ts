@@ -125,35 +125,11 @@ async function buildAndSubmitRefund(
     throw causedError('SIGNING_FAILED', error, 'UNKNOWN');
   }
 
-  const signedTransaction = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
-  const sendResponse = await server.sendTransaction(signedTransaction).catch((error) => {
-    throw createSigningError('SUBMISSION_FAILED', {
-      signingErrorClass: 'RPC_FAILURE',
-      cause: error,
-    });
-  });
+  const signedTransaction = TransactionBuilder.fromXDR(signedXdr, networkPassphrase) as Transaction;
+  const confirmed = await sendAndConfirmTransaction(server, signedTransaction, 'SUBMISSION_FAILED');
 
-  if (sendResponse.status === 'ERROR' || !sendResponse.hash) {
-    throw createSigningError('SUBMISSION_FAILED', {
-      signingErrorClass: 'CONTRACT_REJECTED',
-      cause: sendResponse.status,
-    });
-  }
-
-  const finalResponse = await server
-    .pollTransaction(sendResponse.hash, { attempts: 15 })
-    .catch((error) => {
-      throw createSigningError('TRANSACTION_TIMEOUT', {
-        signingErrorClass: 'RPC_FAILURE',
-        cause: error,
-      });
-    });
-  if (finalResponse.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
-    throw createSigningError('TRANSACTION_FAILED', {
-      signingErrorClass: 'CONTRACT_REJECTED',
-      cause: finalResponse.status,
-    });
-  }
+  return toRefundReceipt(confirmed, { contractId, networkPassphrase, rpcUrl, walletAddress });
+}
 
 function toRefundReceipt(
   confirmed: ConfirmedTransaction,
