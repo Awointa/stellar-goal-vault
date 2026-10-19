@@ -203,6 +203,9 @@ export function CampaignDetailPanel({
   // opens. If that simulation fails, surface a retry-able error next to the
   // pledge button instead of only relying on the toast.
   const selectedToken = pledgeToken || activeCampaign.assetCode;
+  const availableTokens = Array.from(
+    new Set([...(activeCampaign.acceptedTokens ?? []), activeCampaign.assetCode]),
+  );
 
   async function submitPledge() {
     setPledgeError(null);
@@ -392,17 +395,23 @@ export function CampaignDetailPanel({
           </small>
         </div>
 
-        <div className="form-field">
-          <label htmlFor="pledge-token">Asset</label>
-          <select
-            id="pledge-token"
-            value={pledgeToken}
-            onChange={(e) => setPledgeToken(e.target.value)}
-          >
-            <option value="">{`Default (${activeCampaign.assetCode})`}</option>
-            <option value={activeCampaign.assetCode}>{activeCampaign.assetCode}</option>
-          </select>
-        </div>
+        {availableTokens.length > 1 ? (
+          <div className="form-field">
+            <label htmlFor="pledge-token">Asset</label>
+            <select
+              id="pledge-token"
+              value={pledgeToken}
+              onChange={(e) => setPledgeToken(e.target.value)}
+            >
+              <option value="">{`Default (${activeCampaign.assetCode})`}</option>
+              {availableTokens.map((assetCode) => (
+                <option key={assetCode} value={assetCode}>
+                  {assetCode}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
 
         <div className="form-actions">
           <button
